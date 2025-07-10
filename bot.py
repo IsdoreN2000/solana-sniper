@@ -16,7 +16,15 @@ def get_env_var(name, required=True):
 load_dotenv()  # Loads .env for local development
 
 try:
-    private_key_json = get_env_var("PHANTOM_PRIVATE_KEY")
+    raw_key = os.getenv("PHANTOM_PRIVATE_KEY")
+if not raw_key:
+    raise Exception("PHANTOM_PRIVATE_KEY is not set in environment variables")
+
+try:
+    PRIVATE_KEY = json.loads(raw_key)
+except json.JSONDecodeError as e:
+    raise Exception(f"PHANTOM_PRIVATE_KEY is not valid JSON: {e}")
+
     TELEGRAM_TOKEN = get_env_var("TELEGRAM_TOKEN")
     TELEGRAM_CHAT_ID = get_env_var("TELEGRAM_CHAT_ID")
     MAIN_WITHDRAW_WALLET = get_env_var("MAIN_WITHDRAW_WALLET")
