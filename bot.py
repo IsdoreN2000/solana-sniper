@@ -4,20 +4,28 @@ import json
 import requests
 from dotenv import load_dotenv
 from solders.keypair import Keypair
-from solders.pubkey import Pubkey
 from telegram import Bot
 
-# === Load environment variables ===
-load_dotenv()
+# === Robust Environment Variable Loading ===
+def get_env_var(name, required=True):
+    value = os.getenv(name)
+    if required and (value is None or value.strip() == ""):
+        raise Exception(f"Missing required environment variable: {name}")
+    return value
+
+load_dotenv()  # Loads .env for local development
 
 try:
-    PRIVATE_KEY = json.loads(os.getenv("PHANTOM_PRIVATE_KEY"))
-    TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-    MAIN_WITHDRAW_WALLET = os.getenv("MAIN_WITHDRAW_WALLET")
-    assert all([PRIVATE_KEY, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, MAIN_WITHDRAW_WALLET])
+    private_key_json = get_env_var("PHANTOM_PRIVATE_KEY")
+    TELEGRAM_TOKEN = get_env_var("TELEGRAM_TOKEN")
+    TELEGRAM_CHAT_ID = get_env_var("TELEGRAM_CHAT_ID")
+    MAIN_WITHDRAW_WALLET = get_env_var("MAIN_WITHDRAW_WALLET")
+    try:
+        PRIVATE_KEY = json.loads(private_key_json)
+    except Exception as e:
+        raise Exception(f"PHANTOM_PRIVATE_KEY is not valid JSON: {e}")
 except Exception as e:
-    raise Exception("Environment variable error: " + str(e))
+    raise Exception(f"Environment variable error: {e}")
 
 # === Solana Setup (using solders) ===
 try:
@@ -26,8 +34,6 @@ except Exception as e:
     raise Exception(f"Invalid Solana private key: {e}")
 
 wallet = keypair.pubkey()
-# Note: If you need to interact with the Solana blockchain, you can use the 'solana' or 'solana-py' client,
-# but for now, this script only uses solders for key management.
 
 # === Telegram Setup ===
 tg_bot = Bot(token=TELEGRAM_TOKEN)
