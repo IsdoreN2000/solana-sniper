@@ -3,19 +3,15 @@ import time
 import json
 import requests
 from dotenv import load_dotenv
-from solana.keypair import Keypair
-from solana.rpc.api import Client
-from solana.transaction import Transaction
-from solana.system_program import TransferParams, transfer
-from solana.publickey import PublicKey
-from solana.rpc.types import TxOpts
+from solders.keypair import Keypair
+from solders.pubkey import Pubkey
 from telegram import Bot
 
 # === Load environment variables ===
 load_dotenv()
 
 try:
-    PRIVATE_KEY = json.loads(os.getenv("PRIVATE_KEY"))
+    PRIVATE_KEY = json.loads(os.getenv("PHANTOM_PRIVATE_KEY"))
     TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
     TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
     MAIN_WITHDRAW_WALLET = os.getenv("MAIN_WITHDRAW_WALLET")
@@ -23,10 +19,15 @@ try:
 except Exception as e:
     raise Exception("Environment variable error: " + str(e))
 
-# === Solana Setup ===
-keypair = Keypair.from_secret_key(bytes(PRIVATE_KEY))
-wallet = keypair.public_key
-client = Client("https://api.mainnet-beta.solana.com")
+# === Solana Setup (using solders) ===
+try:
+    keypair = Keypair.from_bytes(bytes(PRIVATE_KEY))
+except Exception as e:
+    raise Exception(f"Invalid Solana private key: {e}")
+
+wallet = keypair.pubkey()
+# Note: If you need to interact with the Solana blockchain, you can use the 'solana' or 'solana-py' client,
+# but for now, this script only uses solders for key management.
 
 # === Telegram Setup ===
 tg_bot = Bot(token=TELEGRAM_TOKEN)
@@ -70,26 +71,9 @@ def sell_token(token_address):
     send_alert(f"Selling token: {token_address}")
 
 def withdraw_profits():
-    try:
-        balance = client.get_balance(wallet)["result"]["value"]
-        lamports = int(balance * 0.9)
-        if lamports < 5000:
-            print("Insufficient balance to withdraw.")
-            return
-
-        tx = Transaction().add(
-            transfer(
-                TransferParams(
-                    from_pubkey=wallet,
-                    to_pubkey=PublicKey(MAIN_WITHDRAW_WALLET),
-                    lamports=lamports
-                )
-            )
-        )
-        result = client.send_transaction(tx, keypair, opts=TxOpts(skip_preflight=True))
-        send_alert(f"Withdrawn: https://solscan.io/tx/{result['result']}")
-    except Exception as e:
-        print(f"[Withdraw error]: {e}")
+    # TODO: Implement withdraw logic using a Solana client compatible with solders keypair
+    print("[Withdraw] This function needs to be implemented with a Solana client.")
+    send_alert("Withdraw function is not yet implemented in this version.")
 
 def process_new_tokens():
     tokens = get_pumpfun_tokens()
