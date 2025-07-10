@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: solana-sniper-bot
+    env: python
+    region: frankfurt
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python bot.py"
+    envVars:
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: PHANTOM_PRIVATE_KEY
+        sync: false
+      - key: JUPITER_API_KEY
+        sync: false
