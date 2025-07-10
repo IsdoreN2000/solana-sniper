@@ -2,6 +2,7 @@ import os
 import time
 import json
 import requests
+import asyncio
 from dotenv import load_dotenv
 from solders.keypair import Keypair
 from telegram import Bot
@@ -52,7 +53,7 @@ SNIPER_WALLETS = [
 # === Helpers ===
 def send_alert(message):
     try:
-        tg_bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+        asyncio.run(tg_bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message))
     except Exception as e:
         print(f"Telegram Error: {e}")
 
