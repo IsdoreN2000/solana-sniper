@@ -21,7 +21,7 @@ try:
     TELEGRAM_CHAT_ID = get_env_var("TELEGRAM_CHAT_ID")
     MAIN_WITHDRAW_WALLET = get_env_var("MAIN_WITHDRAW_WALLET")
     try:
-        PRIVATE_KEY = json.loads(private_key_json)
+        PRIVATE_KEY = json.loads(os.getenv("PRIVATE_KEY"))
     except Exception as e:
         raise Exception(f"PHANTOM_PRIVATE_KEY is not valid JSON: {e}")
 except Exception as e:
