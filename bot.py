@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from solders.keypair import Keypair
 from telegram import Bot
 from solana.rpc.async_api import AsyncClient
-from solana.transaction import Transaction
+from solders.transaction import Transaction
 
 # === Load Environment Variables ===
 def get_env_var(name, required=True):
