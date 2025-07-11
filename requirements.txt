@@ -1,4 +1,4 @@
-solana
+solana>=0.25.0,<0.32.0
 solders>=0.16.0,<0.27.0
 python-telegram-bot==20.3
 requests
