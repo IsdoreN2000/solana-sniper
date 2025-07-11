@@ -1,4 +1,7 @@
-solders==0.16.5
-python-telegram-bot==20.3
+solana>=0.25.0,<0.32.0
+solders
+python-telegram-bot
 requests
 python-dotenv
+aiohttp
+pyserum
