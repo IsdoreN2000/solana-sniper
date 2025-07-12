@@ -10,6 +10,7 @@ from solders.keypair import Keypair
 from telegram import Bot
 from solana.rpc.async_api import AsyncClient
 from solders.transaction import Transaction
+from datetime import datetime, timezone
 import websocket
 
 # === Load Environment Variables ===
@@ -91,22 +92,53 @@ def get_sol_usd_price():
         print(f"Error fetching SOL price: {e}")
         return None
 
-def get_pumpfun_tokens():
-    data = fetch_platform_data(
-        "https://pump.fun/api/projects?sort=recent",
-        "Pump.fun"
-    )
-    try:
-        return [
-            {
-                "mint": p.get("mint"),
-                "created_at": p.get("created_at")
+def get_pump_fun_tokens(limit=10, sort="recent", max_age_minutes=15):
+    """
+    Fetch recent tokens from pump.fun using the new GraphQL API.
+    Filters out tokens older than max_age_minutes.
+    """
+    url = "https://pump.fun/api/graphql"
+    headers = {
+        "Content-Type": "application/json",
+        "Origin": "https://pump.fun",
+        "Referer": "https://pump.fun/"
+    }
+    payload = {
+        "operationName": "ExploreProjects",
+        "variables": {
+            "sort": sort,     # Options: 'recent', 'top_gainers', 'top_volume', etc.
+            "limit": limit
+        },
+        "query": """
+            query ExploreProjects($sort: ExploreSortOption!, $limit: Int!) {
+              exploreProjects(sort: $sort, limit: $limit) {
+                id
+                name
+                marketCap
+                createdAt
+              }
             }
-            for p in data.get("projects", [])
-            if p.get("mint") and p.get("created_at")
-        ]
-    except Exception as e:
-        print(f"Pump.fun error: {e}")
+        """
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        tokens = data.get("data", {}).get("exploreProjects", [])
+        fresh_tokens = []
+        for token in tokens:
+            created_at = datetime.fromisoformat(token["createdAt"].replace("Z", "+00:00"))
+            age_minutes = (datetime.now(timezone.utc) - created_at).total_seconds() / 60
+            if age_minutes <= max_age_minutes:
+                fresh_tokens.append({
+                    "mint": token["id"],  # Use "mint" to match your existing logic
+                    "name": token["name"],
+                    "marketCap": token["marketCap"],
+                    "created_at": int(created_at.timestamp())
+                })
+        return fresh_tokens
+    except requests.exceptions.RequestException as e:
+        print(f"Pump.fun API error: {e}")
         return []
 
 def get_moonshot_tokens():
@@ -175,7 +207,7 @@ async def buy_token_async(token_address, amount_sol):
 
 async def process_new_tokens_async():
     now = int(time.time())
-    sources = [get_pumpfun_tokens, get_moonshot_tokens]
+    sources = [get_pump_fun_tokens, get_moonshot_tokens]
     all_tokens = []
     for source in sources:
         all_tokens.extend(source())
