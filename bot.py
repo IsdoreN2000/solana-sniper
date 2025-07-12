@@ -4,11 +4,13 @@ import json
 import requests
 import asyncio
 import base64
+import threading
 from dotenv import load_dotenv
 from solders.keypair import Keypair
 from telegram import Bot
 from solana.rpc.async_api import AsyncClient
 from solders.transaction import Transaction
+import websocket
 
 # === Load Environment Variables ===
 def get_env_var(name, required=True):
@@ -203,9 +205,55 @@ async def process_new_tokens_async():
     for t in tokens_to_buy:
         seen_tokens.add(t["mint"])
 
+# === WebSocket Integration for PumpPortal ===
+def on_message(ws, message):
+    try:
+        data = json.loads(message)
+        if data.get("event") == "newToken":
+            print("🚀 New token detected!")
+            print(json.dumps(data["data"], indent=2))
+            # 👇 Optionally, trigger your buy logic here
+            # Example:
+            # token_address = data["data"].get("mint")
+            # if token_address:
+            #     asyncio.run(buy_token_async(token_address, amount_sol))
+    except Exception as e:
+        print("Error parsing WebSocket message:", e)
+
+def on_error(ws, error):
+    print("WebSocket error:", error)
+
+def on_close(ws, close_status_code, close_msg):
+    print("WebSocket closed:", close_msg)
+
+def on_open(ws):
+    print("✅ WebSocket connection opened")
+    ws.send(json.dumps({
+        "event": "subscribeNewToken",
+        "filters": {}  # You can filter by creator, market cap, etc.
+    }))
+
+def start_pumpportal_ws():
+    websocket.enableTrace(False)
+    ws = websocket.WebSocketApp(
+        "wss://pumpportal.fun/api/data",
+        on_open=on_open,
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close
+    )
+    # Run it in a thread so your bot can do other things too
+    wst = threading.Thread(target=ws.run_forever)
+    wst.daemon = True
+    wst.start()
+
 if __name__ == "__main__":
     print("✅ Bot is starting...")  # Log when the bot starts
     send_alert("Sniper Bot Started: scanning for 4 best tokens in 1-40s window, $5 each.")
+
+    # Start the PumpPortal WebSocket listener in a background thread
+    start_pumpportal_ws()
+
     while True:
         print("✅ Bot main loop entered.")  # Log each time the main loop starts
         try:
