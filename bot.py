@@ -13,8 +13,12 @@ from solana.rpc.async_api import AsyncClient
 
 # === Load Wallet from .env ===
 load_dotenv()
-private_key_array = json.loads(os.getenv("PHANTOM_PRIVATE_KEY"))
-keypair = Keypair.from_bytes(bytes(private_key_array))
+phantom_key_raw = os.getenv("PHANTOM_PRIVATE_KEY")
+if not phantom_key_raw:
+    raise ValueError("❌ PHANTOM_PRIVATE_KEY environment variable is missing!")
+
+private_key_array = json.loads(phantom_key_raw)
+
 
 # === Global Config ===
 seen_tokens = set()
