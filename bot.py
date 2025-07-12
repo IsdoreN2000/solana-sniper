@@ -18,7 +18,7 @@ if not phantom_key_raw:
     raise ValueError("❌ PHANTOM_PRIVATE_KEY environment variable is missing!")
 
 private_key_array = json.loads(phantom_key_raw)
-
+keypair = Keypair.from_bytes(bytes(private_key_array))
 
 # === Global Config ===
 seen_tokens = set()
@@ -42,21 +42,10 @@ def token_is_safe(mint_address):
     # Dummy safety filter — replace with real logic if needed
     return True
 
-# === ✅ Jupiter Swap Logic ===
+# === ✅ Jupiter Swap Logic (placeholder, fill in logic if needed) ===
 async def jupiter_swap_sol_to_token(keypair, token_address, amount_sol):
-    async with AsyncClient("https://api.mainnet-beta.solana.com") as client:
-        jupiter = JupiterClient(client)
-        routes = await jupiter.quote(
-            input_mint="So11111111111111111111111111111111111111112",  # SOL
-            output_mint=token_address,
-            amount=int(amount_sol * 1e9),
-            slippage_bps=100  # 1% slippage
-        )
-        if not routes:
-            raise Exception("No route found")
-        tx = await jupiter.swap(keypair=keypair, route=routes[0])
-        sig = await client.send_raw_transaction(tx.serialize(), opts={"skip_preflight": True})
-        return {"result": str(sig.value)}
+    # You must implement JupiterClient swap logic here if not already
+    raise NotImplementedError("JupiterClient swap logic is not implemented yet.")
 
 # === Buy Token ===
 async def buy_token_async(token_address, amount_sol):
@@ -66,44 +55,29 @@ async def buy_token_async(token_address, amount_sol):
     except Exception as e:
         send_alert(f" Buy failed for {token_address}: {e}")
 
-# === Pump.fun GraphQL Integration ===
-def get_pump_fun_tokens(limit=10, sort="recent", max_age_minutes=5):
-    url = "https://pump.fun/api/graphql"
-    headers = {
-        "Content-Type": "application/json",
-        "Origin": "https://pump.fun",
-        "Referer": "https://pump.fun/"
-    }
-    payload = {
-        "operationName": "ExploreProjects",
-        "variables": {"sort": sort, "limit": limit},
-        "query": """
-            query ExploreProjects($sort: ExploreSortOption!, $limit: Int!) {
-              exploreProjects(sort: $sort, limit: $limit) {
-                id
-                name
-                marketCap
-                createdAt
-              }
-            }
-        """
-    }
+# === ✅ Updated Pump.fun Token Fetcher ===
+def get_pump_fun_tokens(limit=10, max_age_minutes=5):
+    url = "https://pump.fun/token/ALL.json"
     try:
-        res = requests.post(url, headers=headers, json=payload)
+        res = requests.get(url)
         res.raise_for_status()
-        tokens = res.json()["data"]["exploreProjects"]
+        all_tokens = res.json()
+
         fresh = []
-        for t in tokens:
-            created_at = datetime.fromisoformat(t["createdAt"].replace("Z", "+00:00"))
-            age_mins = (datetime.now(timezone.utc) - created_at).total_seconds() / 60
-            if age_mins <= max_age_minutes:
+        now = int(time.time())
+        for token in all_tokens:
+            created_at_ts = token.get("created_unix_time", 0)
+            age_minutes = (now - created_at_ts) / 60
+            if age_minutes <= max_age_minutes:
                 fresh.append({
-                    "mint": t["id"],
-                    "name": t["name"],
-                    "marketCap": t["marketCap"],
-                    "created_at": int(created_at.timestamp())
+                    "mint": token.get("id"),
+                    "name": token.get("name", "Unnamed"),
+                    "marketCap": token.get("market_cap", 0),
+                    "created_at": created_at_ts
                 })
-        return fresh
+        # Return latest tokens first
+        return sorted(fresh, key=lambda x: x["created_at"], reverse=True)[:limit]
+
     except Exception as e:
         print("Pump.fun error:", e)
         return []
