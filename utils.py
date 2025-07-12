@@ -1,82 +1,42 @@
-import aiohttp
-import base64
-import json
-import logging
+import asyncio
+from solders.keypair import Keypair
 from solana.rpc.async_api import AsyncClient
 from solders.pubkey import Pubkey
-from solana.keypair import Keypair
-from solana.transaction import Transaction
+from solders.signature import Signature
+import base64
+import time
 
-# Example sniper wallet list (replace with actual high-performing ones)
-SNIPER_WALLETS = [
-    "D6rxPb9A8dvZYri6uKFYiyL1f95vQxozXWWpFdSxLPFA",
-    "6hWhMX7Z5U7yRy3YqR2cv6VGUwvDcMeYp6ZB8MBdNEh6"
-]
+# You may need this if not defined elsewhere
+from jup_ag import JupiterClient  # or replace with your own Jupiter client logic
 
-PUMP_FUN_API = "https://pump.fun/api/trending"
-JUPITER_API_URL = "https://quote-api.jup.ag/v6/swap"
 
-async def get_tokens_to_buy(my_pubkey):
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(PUMP_FUN_API) as resp:
-                data = await resp.json()
-                tokens = [
-                    t['mint']
-                    for t in data
-                    if t['liquidity'] >= 1 and t['uniqueBuyers'] >= 10
-                ]
-                return tokens
-        except Exception as e:
-            logging.error(f"Error fetching tokens: {e}")
-            return []
+async def sell_token(keypair: Keypair, token_mint: str, min_amount_out: float = 0):
+    """
+    Swap token back to SOL using Jupiter Aggregator
+    """
+    try:
+        async with AsyncClient("https://api.mainnet-beta.solana.com") as client:
+            jupiter = JupiterClient(client)
+            
+            # Step 1: Get quote route
+            routes = await jupiter.quote(
+                input_mint=token_mint,
+                output_mint="So11111111111111111111111111111111111111112",  # SOL
+                amount=1000000,  # You can dynamically get balance to replace this
+                slippage_bps=100,
+            )
+            if not routes:
+                print(f"❌ No routes found for selling token {token_mint}")
+                return None
 
-async def get_sniper_wallet_trades():
-    # Placeholder logic: in production use transaction parsing or webhook service
-    return []
+            # Step 2: Execute swap
+            route = routes[0]
+            tx = await jupiter.swap(keypair=keypair, route=route)
+            sig = await client.send_raw_transaction(tx.serialize(), opts={"skip_preflight": True})
 
-async def jupiter_swap(wallet: Keypair, token_mint: str, amount_sol: float, client: AsyncClient, is_sell=False):
-    from solders.signature import Signature
-    async with aiohttp.ClientSession() as session:
-        url = JUPITER_API_URL
-        headers = {"Content-Type": "application/json"}
-        amount = int(amount_sol * 1_000_000_000)  # convert SOL to lamports
-        body = {
-            "userPublicKey": str(wallet.pubkey()),
-            "inputMint": "So11111111111111111111111111111111111111112" if not is_sell else token_mint,
-            "outputMint": token_mint if not is_sell else "So11111111111111111111111111111111111111112",
-            "amount": amount,
-            "slippageBps": 300,
-            "swapMode": "ExactIn",
-        }
-        async with session.post(url, headers=headers, json=body) as response:
-            result = await response.json()
-            if 'swapTransaction' not in result:
-                raise Exception(f"Jupiter error: {result}")
-            tx_b64 = result['swapTransaction']
-            tx_bytes = base64.b64decode(tx_b64)
-            transaction = Transaction.deserialize(tx_bytes)
-            transaction.sign([wallet])
-            signed = transaction.serialize()
-            tx_sig = await client.send_raw_transaction(signed)
-            await client.confirm_transaction(tx_sig.value)
-            return str(tx_sig.value)
+            print(f"✅ Sold token {token_mint}\n📦 Tx: {sig.value}")
+            return sig.value
 
-async def should_sell_token(token_address: str, my_pubkey: Pubkey, client: AsyncClient) -> bool:
-    # Add real logic like profit target, block height, or price spike
-    return False  # Placeholder: no auto-sell for now
-
-# Example usage (to be run inside an async event loop)
-# async def main():
-#     my_wallet = Keypair()  # Load your keypair securely!
-#     client = AsyncClient("https://api.mainnet-beta.solana.com")
-#     tokens = await get_tokens_to_buy(my_wallet.pubkey())
-#     print("Tokens to buy:", tokens)
-#     # Example: Buy the first token with 0.1 SOL
-#     if tokens:
-#         tx_sig = await jupiter_swap(my_wallet, tokens[0], 0.1, client)
-#         print("Swap transaction signature:", tx_sig)
-#     await client.close()
-#
-# import asyncio
-# asyncio.run(main())
+    except Exception as e:
+        print(f"❌ Error while selling {token_mint}: {e}")
+        return None
