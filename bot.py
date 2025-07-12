@@ -5,12 +5,14 @@ import asyncio
 import threading
 import requests
 import websocket
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from solders.keypair import Keypair
 from solders.pubkey import Pubkey
 from solana.rpc.async_api import AsyncClient
-from utils import JupiterClient, sell_token
+
+# === Custom utils ===
+from utils import sell_token  # Uses JupiterClient passed in
 
 # === Load Wallet from .env ===
 load_dotenv()
@@ -22,12 +24,12 @@ private_key_array = json.loads(phantom_key_raw)
 keypair = Keypair.from_bytes(bytes(private_key_array))
 
 # === Global Config ===
-seen_tokens = set()
-pending_sells = []
+seen_tokens = {}
 SCAN_INTERVAL = 20  # seconds
-SELL_DELAY = 7 * 60  # 7 minutes
+SELL_AFTER_SECONDS = 420  # 7 minutes
+TARGET_MULTIPLIER = 2.0
 
-# === Alerts (you can add Telegram later) ===
+# === Alerts ===
 def send_alert(msg):
     print("🔔", msg)
 
@@ -40,39 +42,66 @@ def get_sol_usd_price():
         print("Error fetching SOL price:", e)
         return None
 
-# === Validate Token ===
+# === Dummy Safety Check ===
 def token_is_safe(mint_address):
     return True
 
-# === ✅ Jupiter Swap Logic ===
-async def jupiter_swap_sol_to_token(keypair, token_address, amount_sol):
-    async with AsyncClient("https://api.mainnet-beta.solana.com") as client:
-        jupiter = JupiterClient(client)
-        routes = await jupiter.quote(
-            input_mint="So11111111111111111111111111111111111111112",
-            output_mint=token_address,
-            amount=int(amount_sol * 1e9),
-            slippage_bps=100
-        )
-        if not routes:
-            raise Exception("No route found")
-        tx = await jupiter.swap(keypair=keypair, route=routes[0])
-        sig = await client.send_raw_transaction(tx.serialize(), opts={"skip_preflight": True})
-        return {"result": str(sig.value)}
-
 # === Buy Token ===
-async def buy_token_async(token_address, amount_sol):
+async def buy_token_async(jupiter, token_address, amount_sol):
     try:
-        resp = await jupiter_swap_sol_to_token(keypair, token_address, amount_sol)
-        buy_time = int(time.time())
-        pending_sells.append({"mint": token_address, "time": buy_time, "buy_amount": amount_sol})
-        send_alert(f"✅ Bought {amount_sol:.6f} SOL of {token_address}\nTx: {resp['result']}")
+        async with AsyncClient("https://api.mainnet-beta.solana.com") as client:
+            routes = await jupiter.quote(
+                input_mint="So11111111111111111111111111111111111111112",
+                output_mint=token_address,
+                amount=int(amount_sol * 1e9),
+                slippage_bps=100
+            )
+            if not routes:
+                raise Exception("No route found")
+            tx = await jupiter.swap(keypair=keypair, route=routes[0])
+            sig = await client.send_raw_transaction(tx.serialize(), opts={"skip_preflight": True})
+        seen_tokens[token_address] = {
+            "buy_time": time.time(),
+            "buy_amount": amount_sol,
+            "buy_price": await get_token_price_usd(token_address),
+            "tx": sig.value
+        }
+        send_alert(f"✅ Bought {amount_sol:.6f} SOL of {token_address}\nTx: {sig.value}")
     except Exception as e:
-        send_alert(f" Buy failed for {token_address}: {e}")
+        send_alert(f"❌ Buy failed for {token_address}: {e}")
 
-# === Pump.fun GraphQL Integration ===
+# === Track and Sell Logic ===
+async def get_token_price_usd(mint):
+    try:
+        url = f"https://price.jup.ag/v4/price?ids={mint}"
+        r = requests.get(url)
+        return r.json()["data"][mint]["price"]
+    except:
+        return 0
+
+async def check_sells(jupiter):
+    current_time = time.time()
+    for token, meta in list(seen_tokens.items()):
+        if "sold" in meta:
+            continue
+        try:
+            now_price = await get_token_price_usd(token)
+            if now_price == 0:
+                continue
+            bought_at = meta["buy_price"]
+            if now_price >= bought_at * TARGET_MULTIPLIER or current_time - meta["buy_time"] > SELL_AFTER_SECONDS:
+                amount = meta["buy_amount"]
+                lamports = int(amount * 1e9)
+                sig = await sell_token(jupiter, keypair, token, lamports)
+                meta["sold"] = True
+                if sig:
+                    send_alert(f"✅ Auto-sold {token} at {now_price:.4f} (bought {bought_at:.4f})\nTx: {sig}")
+        except Exception as e:
+            print(f"Sell error for {token}: {e}")
+
+# === Pump.fun API ===
 def get_pump_fun_tokens(limit=10, sort="recent", max_age_minutes=5):
-    url = "https://pump.fun/api/explore"
+    url = "https://pump.fun/api/projects?sort=recent"
     try:
         res = requests.get(url)
         res.raise_for_status()
@@ -93,104 +122,38 @@ def get_pump_fun_tokens(limit=10, sort="recent", max_age_minutes=5):
         print("Pump.fun error:", e)
         return []
 
-# === Optional: Moonshot tokens ===
-def get_moonshot_tokens():
-    return []
-
-# === Check for tokens to sell ===
-async def handle_sells():
-    now = int(time.time())
-    tokens_to_remove = []
-    for token in pending_sells:
-        token_age = now - token["time"]
-        if token_age >= SELL_DELAY:
-            try:
-                await sell_token(keypair, token["mint"])
-                send_alert(f"📤 Sold token after 7min: {token['mint']}")
-            except Exception as e:
-                send_alert(f"Sell failed for {token['mint']}: {e}")
-            tokens_to_remove.append(token)
-    for t in tokens_to_remove:
-        pending_sells.remove(t)
-
-# === Main Buying Logic ===
-async def process_new_tokens_async():
-    now = int(time.time())
-    sources = [
-        lambda: get_pump_fun_tokens(limit=10, max_age_minutes=5),
-        get_moonshot_tokens
-    ]
-    all_tokens = []
-    for source in sources:
-        all_tokens.extend(source())
-    eligible_tokens = [
-        t for t in all_tokens
-        if t["mint"] not in seen_tokens
-        and 1 <= (now - int(t["created_at"])) <= 40
-        and token_is_safe(t["mint"])
-    ]
-    eligible_tokens.sort(key=lambda t: t["created_at"], reverse=True)
-    tokens_to_buy = eligible_tokens[:4]
-    if not tokens_to_buy:
-        print("⚠️ No eligible tokens found in the 1–40s window.")
-        return
-    sol_usd = get_sol_usd_price()
-    if not sol_usd:
-        send_alert(" Could not fetch SOL/USD price. Skipping buys.")
-        return
-    amount_sol = 5 / sol_usd
-    await asyncio.gather(*(buy_token_async(t["mint"], amount_sol) for t in tokens_to_buy))
-    for t in tokens_to_buy:
-        seen_tokens.add(t["mint"])
-
-# === WebSocket Listener ===
-def on_message(ws, message):
-    try:
-        data = json.loads(message)
-        if data.get("event") == "newToken":
-            print("🚀 New token via WebSocket:")
-            print(json.dumps(data["data"], indent=2))
-    except Exception as e:
-        print("Error in WS message:", e)
-
-def on_error(ws, error):
-    print("WebSocket error:", error)
-
-def on_close(ws, code, msg):
-    print("WebSocket closed:", msg)
-
-def on_open(ws):
-    print("✅ WebSocket opened")
-    ws.send(json.dumps({
-        "event": "subscribeNewToken",
-        "filters": {}
-    }))
-
-def start_pumpportal_ws():
-    websocket.enableTrace(False)
-    ws = websocket.WebSocketApp(
-        "wss://pumpportal.fun/api/data",
-        on_open=on_open,
-        on_message=on_message,
-        on_error=on_error,
-        on_close=on_close
-    )
-    wst = threading.Thread(target=ws.run_forever)
-    wst.daemon = True
-    wst.start()
-
 # === Main Loop ===
-if __name__ == "__main__":
-    print("✅ Sniper Bot Started.")
-    send_alert("Sniper Bot Started: Scanning for best tokens in 1–40s window, $5 per buy.")
-    start_pumpportal_ws()
+async def main_loop(jupiter):
     while True:
         print("🔁 Bot main loop running...")
         try:
-            asyncio.run(process_new_tokens_async())
-            asyncio.run(handle_sells())
-            time.sleep(SCAN_INTERVAL)
+            all_tokens = get_pump_fun_tokens(limit=10, max_age_minutes=5)
+            now = int(time.time())
+            new_tokens = [t for t in all_tokens if t["mint"] not in seen_tokens and 1 <= (now - int(t["created_at"])) <= 40 and token_is_safe(t["mint"])]
+            new_tokens.sort(key=lambda t: t["created_at"], reverse=True)
+            tokens_to_buy = new_tokens[:4]
+
+            sol_usd = get_sol_usd_price()
+            if not sol_usd:
+                send_alert("❌ Could not fetch SOL/USD price. Skipping buys.")
+                continue
+            amount_sol = 5 / sol_usd
+            await asyncio.gather(*(buy_token_async(jupiter, t["mint"], amount_sol) for t in tokens_to_buy))
+            await check_sells(jupiter)
         except Exception as e:
-            print(f" Exception in main loop: {e}")
-            send_alert(f"Bot Error: {e}")
-            time.sleep(60)
+            send_alert(f"⚠️ Bot error: {e}")
+        await asyncio.sleep(SCAN_INTERVAL)
+
+if __name__ == "__main__":
+    print("✅ Sniper Bot Started.")
+    send_alert("Sniper Bot Started: Scanning for best tokens in 1–40s window, $5 per buy.")
+
+    try:
+        from utils import JupiterClient
+        async def run():
+            async with AsyncClient("https://api.mainnet-beta.solana.com") as client:
+                jupiter = JupiterClient(client)
+                await main_loop(jupiter)
+        asyncio.run(run())
+    except Exception as e:
+        print("Startup error:", e)
