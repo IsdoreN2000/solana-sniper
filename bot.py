@@ -35,11 +35,11 @@ def get_sol_usd_price():
         return None
 
 def token_is_safe(mint_address):
-    return True
+    return True  # You can add filters later
 
-# === ✅ Placeholder for Jupiter Buy (to be filled later) ===
+# === Placeholder: Jupiter Swap Logic (to be added later) ===
 async def jupiter_swap_sol_to_token(keypair, token_address, amount_sol):
-    raise NotImplementedError("🔧 Jupiter swap logic not yet added")
+    raise NotImplementedError("🔧 Jupiter swap logic not yet implemented")
 
 async def buy_token_async(token_address, amount_sol):
     try:
@@ -48,7 +48,7 @@ async def buy_token_async(token_address, amount_sol):
     except Exception as e:
         send_alert(f"❌ Buy failed for {token_address}: {e}")
 
-# === ✅ CORRECTED Pump.fun Integration ===
+# === ✅ Corrected Pump.fun Fetching ===
 def get_pump_fun_tokens(limit=10, max_age_minutes=5):
     url = "https://pump.fun/token/ALL.json"
     try:
@@ -75,9 +75,11 @@ def get_pump_fun_tokens(limit=10, max_age_minutes=5):
         print("Pump.fun error:", e)
         return []
 
+# Optional future source
 def get_moonshot_tokens():
-    return []  # optional future source
+    return []
 
+# === Main Logic ===
 async def process_new_tokens_async():
     now = int(time.time())
     all_tokens = get_pump_fun_tokens(limit=10, max_age_minutes=5)
@@ -107,7 +109,7 @@ async def process_new_tokens_async():
     for t in tokens_to_buy:
         seen_tokens.add(t["mint"])
 
-# === WebSocket Listener (optional but running) ===
+# === WebSocket Integration ===
 def on_message(ws, message):
     try:
         data = json.loads(message)
@@ -140,13 +142,7 @@ def start_pumpportal_ws():
     t.daemon = True
     t.start()
 
-# === Main Loop ===
+# === Main Execution Loop ===
 if __name__ == "__main__":
     print("✅ Sniper Bot Started.")
-    send_alert("Sniper Bot Started: Scanning for best tokens in 1–40s window, $5 per buy.")
-    start_pumpportal_ws()
-
-    while True:
-        print("🔁 Bot main loop running...")
-        try:
-            asyncio.run(process_new_tokens_async())
+    send_alert("Sniper Bot Started: Scanning for best tokens in 1–40s window, $5 per buy._
