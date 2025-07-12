@@ -1,95 +1,102 @@
+import aiohttp
 import requests
+import time
 import json
-from datetime import datetime, timezone
-from solders.pubkey import Pubkey
 from solana.rpc.async_api import AsyncClient
-from solders.keypair import Keypair
-from solders.signature import Signature
-from jup.ag import JupiterClient
+from solana.transaction import Transaction
+from solana.rpc.types import TxOpts
+from solana.keypair import Keypair
+from solders.pubkey import Pubkey
+from dotenv import load_dotenv
+import os
 
-# === Global Utils ===
-def send_alert(msg):
-    print("🔔", msg)
+load_dotenv()
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+
+async def jupiter_swap_sol_to_token(keypair, mint_address, amount_sol):
+    async with aiohttp.ClientSession() as session:
+        # Jupiter Quote API
+        quote_url = f"https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint={mint_address}&amount={int(amount_sol * 1e9)}&slippageBps=500"
+        async with session.get(quote_url) as response:
+            quote = await response.json()
+            if not quote.get("data"):
+                raise Exception("No quote found")
+            route = quote["data"][0]
+
+        # Jupiter Swap API
+        swap_url = "https://quote-api.jup.ag/v6/swap"
+        payload = {
+            "userPublicKey": str(keypair.pubkey()),
+            "wrapUnwrapSOL": True,
+            "feeAccount": None,
+            "computeUnitPriceMicroLamports": 0,
+            "asLegacyTransaction": True,
+            **route
+        }
+        async with session.post(swap_url, json=payload) as response:
+            swap = await response.json()
+
+        tx_raw = swap["swapTransaction"]
+        tx_bytes = bytes.fromhex(tx_raw)
+        tx = Transaction.deserialize(tx_bytes)
+        tx.sign([keypair])
+
+        client = AsyncClient("https://api.mainnet-beta.solana.com")
+        txid = await client.send_transaction(tx, keypair, opts=TxOpts(skip_confirmation=False))
+        await client.close()
+
+        return {"result": f"https://solscan.io/tx/{txid.value}"}
+
+
+async def sell_token(keypair, mint_address):
+    # This is a placeholder. You need to reverse the input/outputMint in Jupiter swap for actual sell.
+    return await jupiter_swap_sol_to_token(keypair, "So11111111111111111111111111111111111111112", 0.01)  # sells token for 0.01 SOL worth
+
+
+def send_alert(message):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print(f"[ALERT] {message}")
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    data = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+    try:
+        requests.post(url, json=data)
+    except:
+        pass
+
 
 def get_sol_usd_price():
     try:
-        r = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd")
-        return r.json()["solana"]["usd"]
-    except Exception as e:
-        print("Error fetching SOL price:", e)
+        response = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd")
+        return response.json()["solana"]["usd"]
+    except:
         return None
 
-def get_pump_fun_tokens(limit=10, sort="recent", max_age_minutes=5):
-    url = "https://pump.fun/api/graphql"
-    headers = {
-        "Content-Type": "application/json",
-        "Origin": "https://pump.fun",
-        "Referer": "https://pump.fun/"
-    }
-    payload = {
-        "operationName": "ExploreProjects",
-        "variables": {"sort": sort, "limit": limit},
-        "query": """
-            query ExploreProjects($sort: ExploreSortOption!, $limit: Int!) {
-              exploreProjects(sort: $sort, limit: $limit) {
-                id
-                name
-                marketCap
-                createdAt
-              }
-            }
-        """
-    }
+
+def get_pump_fun_tokens(limit=10, max_age_minutes=5):
     try:
-        res = requests.post(url, headers=headers, json=payload)
-        res.raise_for_status()
-        tokens = res.json()["data"]["exploreProjects"]
-        fresh = []
+        now = int(time.time())
+        url = "https://client-api-2-eta.vercel.app/tokens"  # working proxy of pump.fun
+        res = requests.get(url)
+        tokens = res.json()
+        filtered = []
         for t in tokens:
-            created_at = datetime.fromisoformat(t["createdAt"].replace("Z", "+00:00"))
-            age_mins = (datetime.now(timezone.utc) - created_at).total_seconds() / 60
-            if age_mins <= max_age_minutes:
-                fresh.append({
-                    "mint": t["id"],
-                    "name": t["name"],
-                    "marketCap": t["marketCap"],
-                    "created_at": int(created_at.timestamp())
-                })
-        return fresh
-    except Exception as e:
-        print("Pump.fun error:", e)
+            age_minutes = (now - int(t["created_at"])) / 60
+            if age_minutes <= max_age_minutes:
+                filtered.append(t)
+            if len(filtered) >= limit:
+                break
+        return filtered
+    except:
         return []
 
+
 def get_moonshot_tokens():
-    return []  # placeholder for now
-
-# === Jupiter Buy & Sell ===
-async def jupiter_swap_sol_to_token(keypair: Keypair, token_address: str, amount_sol: float):
-    async with AsyncClient("https://api.mainnet-beta.solana.com") as client:
-        jupiter = JupiterClient(client)
-        routes = await jupiter.quote(
-            input_mint="So11111111111111111111111111111111111111112",  # SOL
-            output_mint=token_address,
-            amount=int(amount_sol * 1e9),
-            slippage_bps=100
-        )
-        if not routes:
-            raise Exception("No swap route found")
-        tx = await jupiter.swap(keypair=keypair, route=routes[0])
-        sig = await client.send_raw_transaction(tx.serialize(), opts={"skip_preflight": True})
-        return {"result": str(sig.value)}
-
-async def sell_token(keypair: Keypair, token_address: str, min_amount_out: int = 0):
-    async with AsyncClient("https://api.mainnet-beta.solana.com") as client:
-        jupiter = JupiterClient(client)
-        routes = await jupiter.quote(
-            input_mint=token_address,
-            output_mint="So11111111111111111111111111111111111111112",  # SOL
-            amount=0,  # Let Jupiter detect max input from wallet
-            slippage_bps=100
-        )
-        if not routes:
-            raise Exception("No swap route found")
-        tx = await jupiter.swap(keypair=keypair, route=routes[0])
-        sig = await client.send_raw_transaction(tx.serialize(), opts={"skip_preflight": True})
-        return {"result": str(sig.value)}
+    try:
+        res = requests.get("https://moonshot-api-v1.vercel.app/sol/tokens")
+        return res.json()
+    except:
+        return []
