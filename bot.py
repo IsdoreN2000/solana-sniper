@@ -164,11 +164,14 @@ async def process_new_tokens_async():
         seen_tokens.add(t["mint"])
 
 if __name__ == "__main__":
+    print("✅ Bot is starting...")  # Log when the bot starts
     send_alert("Sniper Bot Started: scanning for 4 best tokens in 1-40s window, $5 each.")
     while True:
+        print("✅ Bot main loop entered.")  # Log each time the main loop starts
         try:
             asyncio.run(process_new_tokens_async())
             time.sleep(SCAN_INTERVAL)
         except Exception as e:
+            print(f"❌ Exception in main loop: {e}")
             send_alert(f"Bot Error: {e}")
             time.sleep(60)
