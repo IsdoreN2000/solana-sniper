@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 from solders.keypair import Keypair
 from solders.pubkey import Pubkey
 from solana.rpc.async_api import AsyncClient
-from jup.ag import JupiterClient
 
 # === Load Wallet from .env ===
 load_dotenv()
