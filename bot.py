@@ -45,23 +45,62 @@ def send_alert(message):
     except Exception as e:
         print(f"Telegram Error: {e}")
 
+def fetch_platform_data(url, platform_name, params=None, method="GET", json_data=None, retries=3, delay=2):
+    for attempt in range(1, retries + 1):
+        try:
+            if method == "GET":
+                response = requests.get(url, params=params, timeout=10)
+            elif method == "POST":
+                response = requests.post(url, json=json_data, timeout=10)
+            else:
+                raise ValueError("Unsupported HTTP method")
+            response.raise_for_status()
+            if response.text.strip():
+                try:
+                    return response.json()
+                except ValueError as json_err:
+                    print(f"{platform_name} JSON decode error: {json_err}")
+                    print("Response text:", response.text)
+                    return {}
+            else:
+                print(f"{platform_name} error: Empty response body")
+                return {}
+        except requests.exceptions.HTTPError as http_err:
+            print(f"{platform_name} HTTP error: {http_err}")
+            print("Response text:", response.text)
+        except requests.exceptions.RequestException as req_err:
+            print(f"{platform_name} request error: {req_err}")
+        except Exception as e:
+            print(f"{platform_name} unexpected error: {e}")
+
+        if attempt < retries:
+            print(f"Retrying {platform_name} in {delay} seconds... (Attempt {attempt + 1}/{retries})")
+            time.sleep(delay)
+    return {}
+
 def get_sol_usd_price():
+    data = fetch_platform_data(
+        "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd",
+        "CoinGecko"
+    )
     try:
-        res = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd")
-        return res.json()["solana"]["usd"]
+        return data["solana"]["usd"]
     except Exception as e:
         print(f"Error fetching SOL price: {e}")
         return None
 
 def get_pumpfun_tokens():
+    data = fetch_platform_data(
+        "https://pump.fun/api/projects?sort=recent",
+        "Pump.fun"
+    )
     try:
-        res = requests.get("https://pump.fun/api/projects?sort=recent")
         return [
             {
                 "mint": p.get("mint"),
-                "created_at": p.get("created_at")  # seconds since epoch
+                "created_at": p.get("created_at")
             }
-            for p in res.json().get("projects", [])
+            for p in data.get("projects", [])
             if p.get("mint") and p.get("created_at")
         ]
     except Exception as e:
@@ -69,14 +108,17 @@ def get_pumpfun_tokens():
         return []
 
 def get_moonshot_tokens():
+    data = fetch_platform_data(
+        "https://api.moonshot.so/v1/tokens/recent",
+        "Moonshot"
+    )
     try:
-        res = requests.get("https://api.moonshot.so/v1/tokens/recent")
         return [
             {
                 "mint": t.get("mint"),
-                "created_at": int(t.get("launchDate", 0)) // 1000  # convert ms to s
+                "created_at": int(t.get("launchDate", 0)) // 1000
             }
-            for t in res.json().get("tokens", [])
+            for t in data.get("tokens", [])
             if t.get("mint") and t.get("launchDate")
         ]
     except Exception as e:
@@ -102,8 +144,7 @@ async def jupiter_swap_sol_to_token(
             "slippageBps": str(slippage_bps),
             "swapMode": "ExactIn"
         }
-        quote_resp = requests.get(JUPITER_QUOTE_URL, params=params)
-        quote = quote_resp.json()
+        quote = fetch_platform_data(JUPITER_QUOTE_URL, "Jupiter Quote", params=params)
         if not quote.get("outAmount") or not quote.get("routes"):
             raise Exception(f"Jupiter quote failed: {quote}")
 
@@ -113,8 +154,7 @@ async def jupiter_swap_sol_to_token(
             "wrapUnwrapSOL": True,
             "asLegacyTransaction": True
         }
-        swap_resp = requests.post(JUPITER_SWAP_URL, json=swap_req)
-        swap_data = swap_resp.json()
+        swap_data = fetch_platform_data(JUPITER_SWAP_URL, "Jupiter Swap", method="POST", json_data=swap_req)
         if "swapTransaction" not in swap_data:
             raise Exception(f"Jupiter swap failed: {swap_data}")
 
