@@ -9,6 +9,8 @@ import threading
 from datetime import datetime, timezone
 
 from solders.keypair import Keypair
+from solana.rpc.async_api import AsyncClient
+
 from utils import (
     jupiter_swap_sol_to_token,
     sell_token,
@@ -18,7 +20,6 @@ from utils import (
     get_moonshot_tokens
 )
 
-import requests
 import websocket
 
 # === Load Wallet from .env ===
@@ -50,23 +51,23 @@ def token_is_safe(mint_address):
     return True  # Placeholder for your safety logic
 
 # === Auto Buy Logic ===
-async def buy_token_async(token_address, amount_sol):
+async def buy_token_async(client, token_address, amount_sol):
     try:
-        resp = await jupiter_swap_sol_to_token(keypair, token_address, amount_sol)
+        resp = await jupiter_swap_sol_to_token(client, keypair, token_address, amount_sol)
         seen_tokens[token_address] = {
             "buy_time": time.time(),
             "buy_price_sol": amount_sol,
             "bought": True,
             "sold": False
         }
-        send_alert(f"✅ Bought {amount_sol:.4f} SOL of {token_address}\nTx: {resp['result']}")
+        send_alert(f"✅ Bought {amount_sol:.4f} SOL of {token_address}\nTx: {resp}")
     except Exception as e:
         send_alert(f"❌ Buy failed for {token_address}: {e}")
 
 # === Auto Sell Logic ===
-async def auto_sell_tokens():
+async def auto_sell_tokens(client):
     current_time = time.time()
-    sol_usd = get_sol_usd_price()
+    sol_usd = await get_sol_usd_price()
     if not sol_usd:
         return
     for mint, info in list(seen_tokens.items()):
@@ -84,42 +85,41 @@ async def auto_sell_tokens():
             continue
         if should_sell:
             try:
-                resp = await sell_token(keypair, mint)
+                resp = await sell_token(client, keypair, mint)
                 seen_tokens[mint]["sold"] = True
-                send_alert(f"💰 Sold {mint} - {reason}\nTx: {resp['result']}")
+                send_alert(f"💰 Sold {mint} - {reason}\nTx: {resp}")
             except Exception as e:
                 send_alert(f"❌ Sell failed for {mint}: {e}")
 
 # === New Token Scanner ===
-async def process_new_tokens_async():
+async def process_new_tokens_async(client):
     now = int(time.time())
-    sources = [
-        lambda: get_pump_fun_tokens(limit=10, max_age_minutes=5),
-        get_moonshot_tokens
-    ]
     all_tokens = []
-    for source in sources:
-        all_tokens.extend(source())
+    # Await async token fetchers
+    pump_tokens = await get_pump_fun_tokens()
+    moonshot_tokens = await get_moonshot_tokens()
+    all_tokens.extend(pump_tokens)
+    all_tokens.extend(moonshot_tokens)
     eligible = [
         t for t in all_tokens
-        if t["mint"] not in seen_tokens
-        and 1 <= (now - int(t["created_at"])) <= 60  # <-- now 1 to 60 seconds
-        and token_is_safe(t["mint"])
+        if t.get("mint") not in seen_tokens
+        and 1 <= (now - int(t.get("created_at", now))) <= 60
+        and token_is_safe(t.get("mint"))
     ]
-    eligible.sort(key=lambda t: t["created_at"], reverse=True)
+    eligible.sort(key=lambda t: t.get("created_at", 0), reverse=True)
     tokens_to_buy = eligible[:3]
 
     if not tokens_to_buy:
         print("⚠️ No eligible tokens found in the 1–60s window.")
         return
 
-    sol_usd = get_sol_usd_price()
+    sol_usd = await get_sol_usd_price()
     if not sol_usd:
         send_alert("⚠️ Could not fetch SOL/USD price. Skipping buys.")
         return
 
     amount_sol = 5 / sol_usd  # $5 in SOL
-    await asyncio.gather(*(buy_token_async(t["mint"], amount_sol) for t in tokens_to_buy))
+    await asyncio.gather(*(buy_token_async(client, t["mint"], amount_sol) for t in tokens_to_buy))
 
 # === WebSocket for Live New Tokens ===
 def on_message(ws, message):
@@ -158,17 +158,24 @@ def start_websocket():
     wst.start()
 
 # === Main ===
-if __name__ == "__main__":
+async def main_loop():
     print("✅ Sniper Bot Started.")
     send_alert("Sniper Bot Started: Scanning for best tokens in 1–60s window, $5 per buy.")
     start_websocket()
-    while True:
-        print("🔁 Bot main loop running...")
-        try:
-            asyncio.run(process_new_tokens_async())
-            asyncio.run(auto_sell_tokens())
-            time.sleep(SCAN_INTERVAL)
-        except Exception as e:
-            print(f"❌ Exception in loop: {e}")
-            send_alert(f"Bot Error: {e}")
-            time.sleep(60)
+    rpc_url = os.getenv("RPC_URL")
+    if not rpc_url:
+        raise ValueError("❌ RPC_URL is missing! Please add it to your .env file.")
+    async with AsyncClient(rpc_url) as client:
+        while True:
+            print("🔁 Bot main loop running...")
+            try:
+                await process_new_tokens_async(client)
+                await auto_sell_tokens(client)
+                await asyncio.sleep(SCAN_INTERVAL)
+            except Exception as e:
+                print(f"❌ Exception in loop: {e}")
+                send_alert(f"Bot Error: {e}")
+                await asyncio.sleep(60)
+
+if __name__ == "__main__":
+    asyncio.run(main_loop())
