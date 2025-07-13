@@ -1,4 +1,3 @@
-
 import os
 import json
 import base64
@@ -15,6 +14,8 @@ from solana.rpc.types import TxOpts
 
 # === Constants ===
 RPC_URL = os.getenv("RPC_URL")
+if not RPC_URL:
+    raise ValueError("❌ RPC_URL is missing! Please add it to your .env file.")
 
 # === Alert function ===
 def send_alert(message: str):
@@ -25,15 +26,27 @@ def send_alert(message: str):
 
 # === Load keypair from .env ===
 def load_keypair_from_env():
-    private_key_array = json.loads(os.getenv("PHANTOM_PRIVATE_KEY"))
-    return Keypair.from_bytes(bytes(private_key_array))
+    key = os.getenv("PHANTOM_PRIVATE_KEY")
+    if not key:
+        raise ValueError("❌ PHANTOM_PRIVATE_KEY is missing! Please add it to your .env file.")
+    try:
+        private_key_array = json.loads(key)
+        if not isinstance(private_key_array, list):
+            raise ValueError("PHANTOM_PRIVATE_KEY must be a JSON array, e.g. [12,34,...]")
+        return Keypair.from_bytes(bytes(private_key_array))
+    except Exception as e:
+        raise ValueError(f"Invalid PHANTOM_PRIVATE_KEY: {e}")
 
 # === Get current SOL/USD price ===
 async def get_sol_usd_price():
     async with aiohttp.ClientSession() as session:
-        async with session.get("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd") as resp:
-            data = await resp.json()
-            return data['solana']['usd']
+        try:
+            async with session.get("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd") as resp:
+                data = await resp.json()
+                return data['solana']['usd']
+        except Exception as e:
+            send_alert(f"Error fetching SOL/USD price: {e}")
+            return None
 
 # === Fetch latest tokens from pump.fun ===
 async def get_pump_fun_tokens():
@@ -42,7 +55,7 @@ async def get_pump_fun_tokens():
             async with session.get("https://pump.fun/api/latest-tokens") as response:
                 return await response.json()
     except Exception as e:
-        print("Pump.fun error:", e)
+        send_alert(f"Pump.fun error: {e}")
         return []
 
 # === Stub for other platforms ===
@@ -52,11 +65,13 @@ async def get_moonshot_tokens():
 # === Dummy Jupiter Swap Logic (replace with real later) ===
 async def jupiter_swap_sol_to_token(client: AsyncClient, keypair: Keypair, token_mint: str, sol_amount: float):
     print(f"[SWAP] Buying {token_mint} with {sol_amount} SOL...")
+    # Replace with real swap logic
     return "DummyTxSignature"
 
 # === Dummy Sell Logic ===
 async def sell_token(client: AsyncClient, keypair: Keypair, token_mint: str):
     print(f"[SELL] Selling token {token_mint}...")
+    # Replace with real sell logic
     return "DummySellSignature"
 
 # === Timer Helpers ===
@@ -68,5 +83,18 @@ def get_token_age_minutes(created_at_str):
     except Exception:
         return 999
 
-# === Async Client Setup ===
-client = AsyncClient(RPC_URL)
+# === Example usage as a script ===
+if __name__ == "__main__":
+    async def main():
+        keypair = load_keypair_from_env()
+        async with AsyncClient(RPC_URL) as client:
+            sol_price = await get_sol_usd_price()
+            print("SOL/USD:", sol_price)
+            tokens = await get_pump_fun_tokens()
+            print("Tokens:", tokens[:2])
+            # Example swap
+            await jupiter_swap_sol_to_token(client, keypair, "TOKEN_MINT_ADDRESS", 0.1)
+            # Example sell
+            await sell_token(client, keypair, "TOKEN_MINT_ADDRESS")
+
+    asyncio.run(main())
