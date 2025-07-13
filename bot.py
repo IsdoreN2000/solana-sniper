@@ -1,5 +1,6 @@
 from dotenv import load_dotenv
-load_dotenv
+load_dotenv()  # Load environment variables from .env at the very start
+
 import os
 import json
 import time
@@ -7,7 +8,6 @@ import asyncio
 import threading
 from datetime import datetime, timezone
 
-from dotenv import load_dotenv
 from solders.keypair import Keypair
 from utils import (
     jupiter_swap_sol_to_token,
@@ -22,12 +22,22 @@ import requests
 import websocket
 
 # === Load Wallet from .env ===
-load_dotenv()
 phantom_key_raw = os.getenv("PHANTOM_PRIVATE_KEY")
 if not phantom_key_raw:
-    raise ValueError("❌ PHANTOM_PRIVATE_KEY is missing!")
+    raise ValueError(
+        "❌ PHANTOM_PRIVATE_KEY is missing! Please add it to your .env file as a JSON array, e.g. PHANTOM_PRIVATE_KEY=[12,34,...]"
+    )
 
-private_key_array = json.loads(phantom_key_raw)
+try:
+    private_key_array = json.loads(phantom_key_raw)
+    if not isinstance(private_key_array, list):
+        raise ValueError("PHANTOM_PRIVATE_KEY must be a JSON array, e.g. [12,34,...]")
+except Exception as e:
+    raise Exception(
+        f"PHANTOM_PRIVATE_KEY is not valid JSON array: {e}\n"
+        "Example .env line:\nPHANTOM_PRIVATE_KEY=[12,34,56,...]"
+    )
+
 keypair = Keypair.from_bytes(bytes(private_key_array))
 
 # === Global Config ===
@@ -37,7 +47,7 @@ TOKEN_HOLD_SECONDS = 420  # 7 minutes
 
 # === Token Safety Filter ===
 def token_is_safe(mint_address):
-    return True  # Placeholder
+    return True  # Placeholder for your safety logic
 
 # === Auto Buy Logic ===
 async def buy_token_async(token_address, amount_sol):
@@ -162,3 +172,4 @@ if __name__ == "__main__":
             print(f"❌ Exception in loop: {e}")
             send_alert(f"Bot Error: {e}")
             time.sleep(60)
+
