@@ -1,9 +1,9 @@
-solders>=0.16.0,<0.27.0
+solders==0.26.0
+solana==0.30.0
+pyserum==0.4.21
 python-telegram-bot==20.3
 requests
 python-dotenv
 aiohttp
-pyserum
 websocket-client
 httpx==0.23.0
-solana
