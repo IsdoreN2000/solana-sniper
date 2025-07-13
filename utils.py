@@ -9,7 +9,7 @@ from solders.keypair import Keypair
 from solders.pubkey import Pubkey
 from solders.transaction import VersionedTransaction
 from solders.rpc.requests import GetTokenAccountsByOwner
-from solana.rpc.async_api import AsyncClient  # still needed for network communication
+from solana.rpc.async_api import AsyncClient
 from solana.rpc.types import TxOpts
 
 # === Constants ===
@@ -48,12 +48,25 @@ async def get_sol_usd_price():
             send_alert(f"Error fetching SOL/USD price: {e}")
             return None
 
-# === Fetch latest tokens from pump.fun ===
-async def get_pump_fun_tokens():
+# === Fetch latest tokens from pump.fun (updated endpoint) ===
+async def get_pump_fun_tokens(min_age=0, max_age=60):
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get("https://pump.fun/api/latest-tokens") as response:
-                return await response.json()
+            async with session.get("https://pump.fun/api/pools") as response:
+                if response.status != 200:
+                    send_alert(f"Pump.fun error: {response.status}")
+                    return []
+                data = await response.json()
+                now = datetime.now(timezone.utc).timestamp()
+                recent_tokens = []
+                for token in data:
+                    created_at = token.get("created_at")
+                    if created_at is None:
+                        continue
+                    age = now - created_at
+                    if min_age <= age <= max_age:
+                        recent_tokens.append(token)
+                return recent_tokens
     except Exception as e:
         send_alert(f"Pump.fun error: {e}")
         return []
