@@ -6,3 +6,5 @@ python-dotenv
 aiohttp
 pyserum
 websocket-client
+httpx==0.23.0
+solana
