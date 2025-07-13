@@ -15,3 +15,5 @@ services:
         sync: false
       - key: MAIN_WITHDRAW_WALLET
         sync: false
+      - key: RPC_URL
+        sync: false
