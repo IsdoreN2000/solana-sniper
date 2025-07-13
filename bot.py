@@ -103,14 +103,14 @@ async def process_new_tokens_async():
     eligible = [
         t for t in all_tokens
         if t["mint"] not in seen_tokens
-        and 1 <= (now - int(t["created_at"])) <= 40
+        and 1 <= (now - int(t["created_at"])) <= 60  # <-- now 1 to 60 seconds
         and token_is_safe(t["mint"])
     ]
     eligible.sort(key=lambda t: t["created_at"], reverse=True)
     tokens_to_buy = eligible[:3]
 
     if not tokens_to_buy:
-        print("⚠️ No eligible tokens found in the 1–40s window.")
+        print("⚠️ No eligible tokens found in the 1–60s window.")
         return
 
     sol_usd = get_sol_usd_price()
@@ -160,7 +160,7 @@ def start_websocket():
 # === Main ===
 if __name__ == "__main__":
     print("✅ Sniper Bot Started.")
-    send_alert("Sniper Bot Started: Scanning for best tokens in 1–40s window, $5 per buy.")
+    send_alert("Sniper Bot Started: Scanning for best tokens in 1–60s window, $5 per buy.")
     start_websocket()
     while True:
         print("🔁 Bot main loop running...")
@@ -172,4 +172,3 @@ if __name__ == "__main__":
             print(f"❌ Exception in loop: {e}")
             send_alert(f"Bot Error: {e}")
             time.sleep(60)
-
